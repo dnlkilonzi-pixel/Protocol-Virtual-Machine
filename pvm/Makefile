@@ -56,9 +56,14 @@ LDFLAGS := $(LDFLAGS_EXTRA)
 PVM_SRCS := \
     main.c                              \
     core/pvm.c                          \
+    core/scheduler.c                    \
+    core/pipeline.c                     \
+    core/bytecode.c                     \
     net/packet.c                        \
     net/dispatcher.c                    \
+    net/negotiation.c                   \
     platform/module_loader.c            \
+    platform/sim/platform_sim.c         \
     $(PLATFORM_SRC)
 
 PVM_TARGET := pvm_demo

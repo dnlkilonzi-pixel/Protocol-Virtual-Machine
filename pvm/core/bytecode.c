@@ -98,10 +98,13 @@ int pvm_bc_execute(const PvmBytecodeProgram *prog,
 
         case OP_SET_FIELD_U8:
             /* Set a single byte at the given offset. */
-            if (inst->arg1 < BC_FRAME_BUF_SIZE) {
-                c->frame[inst->arg1] = (uint8_t)(inst->arg2 & 0xFF);
-                if (c->frame_len < (size_t)(inst->arg1 + 1))
-                    c->frame_len = (size_t)(inst->arg1 + 1);
+            {
+                size_t off = (size_t)inst->arg1;
+                if (off < BC_FRAME_BUF_SIZE) {
+                    c->frame[off] = (uint8_t)(inst->arg2 & 0xFF);
+                    if (c->frame_len < off + 1)
+                        c->frame_len = off + 1;
+                }
             }
             break;
 
