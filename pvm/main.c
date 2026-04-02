@@ -17,6 +17,11 @@
  *     9. Network Simulation Mode      (chaos testing engine)
  *    10. Cross-Device Negotiation     (capability exchange)
  *
+ *   EVOLUTION PATH DEMOS:
+ *    11. Network Kernel Mode          (POSIX-like socket API)
+ *    12. Protocol DSL                 (human-readable protocol definitions)
+ *    13. Distributed PVM Mesh         (multi-node coordination)
+ *
  * Build:
  *   make          - auto-detects OS, builds modules and binary
  *
@@ -35,6 +40,9 @@
 #include "bytecode.h"
 #include "simulator.h"
 #include "negotiation.h"
+#include "pvm_socket.h"
+#include "proto_dsl.h"
+#include "mesh.h"
 
 /* -------------------------------------------------------------------------
  * Utility - pretty-print a byte buffer
@@ -556,6 +564,251 @@ static void demo_negotiation(void)
 }
 
 /* =========================================================================
+ * EVOLUTION PATH DEMOS
+ * ====================================================================== */
+
+/* --- Demo 10: Network Kernel Mode (Socket API) -------------------------- */
+static void demo_socket_api(void)
+{
+    demo_separator("DEMO 10 - Network Kernel Mode (Socket API)");
+
+    printf("\n  PVM as a user-space networking kernel.\n");
+    printf("  Applications use pvm_socket/connect/send/recv/close\n");
+    printf("  just like BSD sockets, but traffic flows through PVM.\n\n");
+
+    /* Create a DGRAM socket using UDP protocol. */
+    int fd1 = pvm_socket(PVM_SOCK_DGRAM, "udp");
+    printf("  Created DGRAM socket: fd=%d\n", fd1);
+
+    /* Create a STREAM socket using VESPER-LITE. */
+    int fd2 = pvm_socket(PVM_SOCK_STREAM, "vesper_lite");
+    printf("  Created STREAM socket: fd=%d\n", fd2);
+
+    /* Bind fd2 to a local address. */
+    pvm_sock_bind(fd2, "0.0.0.0", 8080);
+
+    /* Connect fd1 via UDP loopback. */
+    pvm_sock_connect(fd1, "127.0.0.1", 9001);
+
+    /* Send data through the socket API. */
+    const char *msg = "Hello from PVM socket API!";
+    int sent = pvm_sock_send(fd1, (const uint8_t *)msg, strlen(msg), 0);
+    printf("  pvm_sock_send(fd=%d) -> %d bytes sent.\n", fd1, sent);
+
+    /* Receive via socket API. */
+    uint8_t rx[256];
+    int n = pvm_sock_recv(fd1, rx, sizeof(rx), 0);
+    if (n > 0) {
+        rx[n] = '\0';
+        printf("  pvm_sock_recv(fd=%d) -> %d bytes: \"%s\"\n", fd1, n, (char *)rx);
+    } else {
+        printf("  pvm_sock_recv(fd=%d) -> no data (expected in loopback).\n", fd1);
+    }
+
+    /* Show socket info. */
+    const PvmSocket *info = pvm_sock_info(fd1);
+    if (info) {
+        printf("\n  Socket info for fd=%d:\n", fd1);
+        printf("    type=%s  state=%s  proto=%s\n",
+               pvm_sock_type_name(info->type),
+               pvm_sock_state_name(info->state),
+               info->protocol);
+        printf("    remote=%s:%u  sent=%lu  recv=%lu\n",
+               info->remote_addr.addr, info->remote_addr.port,
+               (unsigned long)info->bytes_sent, (unsigned long)info->bytes_recv);
+    }
+
+    /* List all active sockets. */
+    printf("\n");
+    pvm_sock_list();
+
+    /* Close sockets. */
+    pvm_sock_close(fd1);
+    pvm_sock_close(fd2);
+
+    printf("\n  Socket API demo complete.\n");
+}
+
+/* --- Demo 11: Protocol DSL ---------------------------------------------- */
+static void demo_protocol_dsl(void)
+{
+    demo_separator("DEMO 11 - Protocol DSL (Human-Readable Definitions)");
+
+    printf("\n  Defining protocols with a simple DSL instead of C code.\n");
+    printf("  The DSL compiles to bytecode VM programs automatically.\n\n");
+
+    pvm_dsl_init();
+
+    /* --- Block format --- */
+    printf("  === Block format ===\n");
+    const char *block_src =
+        "protocol vesper_custom {\n"
+        "    proto_id    0x03;\n"
+        "    version     2;\n"
+        "    type        DATA;\n"
+        "    compression rle;\n"
+        "    security    xor;\n"
+        "    reliability medium;\n"
+        "}";
+
+    printf("  Source:\n");
+    printf("  %s\n\n", block_src);
+
+    PvmProtoDef def1;
+    if (pvm_dsl_parse(block_src, &def1) == 0) {
+        pvm_dsl_print_def(&def1);
+
+        /* Compile to bytecode. */
+        PvmBytecodeProgram send_prog, recv_prog;
+        if (pvm_dsl_compile_send(&def1, &send_prog) == 0) {
+            printf("\n  Generated send program:\n");
+            pvm_bc_disassemble(&send_prog);
+        }
+        if (pvm_dsl_compile_recv(&def1, &recv_prog) == 0) {
+            printf("\n  Generated recv program:\n");
+            pvm_bc_disassemble(&recv_prog);
+        }
+    }
+
+    /* --- Inline format --- */
+    printf("\n  === Inline format ===\n");
+    const char *inline_src = "fast_udp: proto_id=0x05 version=1 type=DATA compression=none security=none reliability=low";
+    printf("  Source: \"%s\"\n\n", inline_src);
+
+    PvmProtoDef def2;
+    if (pvm_dsl_parse(inline_src, &def2) == 0) {
+        pvm_dsl_print_def(&def2);
+
+        PvmBytecodeProgram send_prog2;
+        if (pvm_dsl_compile_send(&def2, &send_prog2) == 0) {
+            printf("\n  Generated send program:\n");
+            pvm_bc_disassemble(&send_prog2);
+        }
+    }
+
+    /* --- Execute a DSL-compiled program --- */
+    printf("\n  === Executing DSL-compiled bytecode ===\n");
+    PvmBytecodeProgram exec_prog;
+    pvm_dsl_compile_send(&def1, &exec_prog);
+
+    const char *payload = "DSL-defined protocol message!";
+    printf("  Sending via DSL-compiled program: \"%s\"\n", payload);
+    PvmBytecodeCtx ctx;
+    int sent = pvm_bc_execute(&exec_prog, (const uint8_t *)payload,
+                               strlen(payload), &ctx);
+    if (sent > 0) {
+        printf("  Bytecode sent %d bytes.\n", sent);
+        printf("  Frame on wire: ");
+        for (size_t i = 0; i < ctx.frame_len && i < 32; ++i)
+            printf("%02X ", ctx.frame[i]);
+        if (ctx.frame_len > 32) printf("...");
+        printf("\n");
+    }
+
+    pvm_dsl_shutdown();
+}
+
+/* --- Demo 12: Distributed PVM Mesh -------------------------------------- */
+static void demo_mesh(void)
+{
+    demo_separator("DEMO 12 - Distributed PVM Mesh");
+
+    printf("\n  Multiple PVM nodes forming a self-adapting distributed system.\n");
+    printf("  Nodes share scheduler state, capabilities, and elect protocols.\n\n");
+
+    /* Initialise local node. */
+    pvm_mesh_init("node-A");
+
+    /* Set local capabilities. */
+    char local_protos[3][MESH_PROTO_NAME_WIDTH];
+    strncpy(local_protos[0], "udp", MESH_PROTO_NAME_WIDTH - 1);
+    local_protos[0][MESH_PROTO_NAME_WIDTH - 1] = '\0';
+    strncpy(local_protos[1], "vesper_lite", MESH_PROTO_NAME_WIDTH - 1);
+    local_protos[1][MESH_PROTO_NAME_WIDTH - 1] = '\0';
+    strncpy(local_protos[2], "quic_lite", MESH_PROTO_NAME_WIDTH - 1);
+    local_protos[2][MESH_PROTO_NAME_WIDTH - 1] = '\0';
+    pvm_mesh_set_local_protocols((const char (*)[MESH_PROTO_NAME_WIDTH])local_protos, 3);
+
+    /* Add remote peers. */
+    pvm_mesh_add_peer("node-B", "192.168.1.2", 9001);
+    pvm_mesh_add_peer("node-C", "192.168.1.3", 9001);
+    pvm_mesh_add_peer("node-D", "192.168.1.4", 9001);
+
+    /* Set peer capabilities. */
+    char peer_b_protos[2][MESH_PROTO_NAME_WIDTH];
+    strncpy(peer_b_protos[0], "udp", MESH_PROTO_NAME_WIDTH - 1);
+    peer_b_protos[0][MESH_PROTO_NAME_WIDTH - 1] = '\0';
+    strncpy(peer_b_protos[1], "vesper_lite", MESH_PROTO_NAME_WIDTH - 1);
+    peer_b_protos[1][MESH_PROTO_NAME_WIDTH - 1] = '\0';
+    pvm_mesh_set_peer_protocols("node-B",
+                                (const char (*)[MESH_PROTO_NAME_WIDTH])peer_b_protos, 2);
+
+    char peer_c_protos[3][MESH_PROTO_NAME_WIDTH];
+    strncpy(peer_c_protos[0], "vesper_lite", MESH_PROTO_NAME_WIDTH - 1);
+    peer_c_protos[0][MESH_PROTO_NAME_WIDTH - 1] = '\0';
+    strncpy(peer_c_protos[1], "quic_lite", MESH_PROTO_NAME_WIDTH - 1);
+    peer_c_protos[1][MESH_PROTO_NAME_WIDTH - 1] = '\0';
+    strncpy(peer_c_protos[2], "tcp_lite", MESH_PROTO_NAME_WIDTH - 1);
+    peer_c_protos[2][MESH_PROTO_NAME_WIDTH - 1] = '\0';
+    pvm_mesh_set_peer_protocols("node-C",
+                                (const char (*)[MESH_PROTO_NAME_WIDTH])peer_c_protos, 3);
+
+    char peer_d_protos[1][MESH_PROTO_NAME_WIDTH];
+    strncpy(peer_d_protos[0], "vesper_lite", MESH_PROTO_NAME_WIDTH - 1);
+    peer_d_protos[0][MESH_PROTO_NAME_WIDTH - 1] = '\0';
+    pvm_mesh_set_peer_protocols("node-D",
+                                (const char (*)[MESH_PROTO_NAME_WIDTH])peer_d_protos, 1);
+
+    /* Set peer network states. */
+    pvm_mesh_set_peer_state("node-B", MESH_NODE_ALIVE, 25, 0);
+    pvm_mesh_set_peer_state("node-C", MESH_NODE_ALIVE, 45, 2);
+    pvm_mesh_set_peer_state("node-D", MESH_NODE_DEAD, 999, 50);
+
+    /* List peers. */
+    printf("\n");
+    pvm_mesh_list_peers();
+
+    /* Broadcast capabilities. */
+    printf("\n");
+    int bc_len = pvm_mesh_broadcast_caps();
+    printf("  Broadcast message: %d bytes\n", bc_len);
+
+    /* Sync scheduler metrics. */
+    printf("\n");
+    pvm_scheduler_init();
+    pvm_scheduler_update_metric(SCHED_METRIC_LATENCY_MS, 35);
+    pvm_scheduler_update_metric(SCHED_METRIC_LOSS_PCT, 1);
+    pvm_scheduler_update_metric(SCHED_METRIC_BW_KBPS, 10000);
+    pvm_mesh_sync_metrics();
+    pvm_scheduler_shutdown();
+
+    /* Run protocol election. */
+    printf("\n  === Protocol Election ===\n");
+    MeshElectionResult election;
+    pvm_mesh_elect_protocol(&election);
+
+    if (election.success) {
+        printf("  >>> CONSENSUS: All nodes should use '%s' (%d/%d supporters) <<<\n",
+               election.protocol, election.supporters, election.total_nodes);
+    } else {
+        printf("  >>> NO CONSENSUS: Best candidate '%s' (%d/%d) lacks majority <<<\n",
+               election.protocol, election.supporters, election.total_nodes);
+    }
+
+    /* Show mesh stats. */
+    MeshStats mst;
+    pvm_mesh_get_stats(&mst);
+    printf("\n  Mesh stats:\n");
+    printf("    Total peers:  %d\n", mst.total_peers);
+    printf("    Alive:        %d\n", mst.alive_peers);
+    printf("    Dead:         %d\n", mst.dead_peers);
+    printf("    Msgs sent:    %lu\n", (unsigned long)mst.messages_sent);
+    printf("    Msgs recv:    %lu\n", (unsigned long)mst.messages_received);
+
+    pvm_mesh_shutdown();
+}
+
+/* =========================================================================
  * main
  * ====================================================================== */
 int main(void)
@@ -572,6 +825,10 @@ int main(void)
     printf("|    [4] Protocol Bytecode VM                                  |\n");
     printf("|    [5] Network Simulation Engine                             |\n");
     printf("|    [6] Cross-Device Protocol Negotiation                     |\n");
+    printf("|  Evolution Paths:                                            |\n");
+    printf("|    [7] Network Kernel Mode (Socket API)                      |\n");
+    printf("|    [8] Protocol DSL (Human-Readable Definitions)             |\n");
+    printf("|    [9] Distributed PVM Mesh                                  |\n");
     printf("+--------------------------------------------------------------+\n");
 
     /* === STEP 1: Initialise the PVM runtime === */
@@ -609,8 +866,13 @@ int main(void)
     demo_simulator();
     demo_negotiation();
 
-    /* === STEP 5: Unload and shutdown === */
-    demo_separator("STEP 5 - Unloading & Shutdown");
+    /* === STEP 5: Evolution path demos === */
+    demo_socket_api();
+    demo_protocol_dsl();
+    demo_mesh();
+
+    /* === STEP 6: Unload and shutdown === */
+    demo_separator("STEP 6 - Unloading & Shutdown");
     printf("\n  pvm_unload(\"udp\") ...\n");
     pvm_unload("udp");
     printf("\n  Remaining modules:\n");
@@ -618,7 +880,7 @@ int main(void)
     printf("\n");
     pvm_shutdown();
 
-    printf("\n  Demo complete. All 5 revolutionary features demonstrated.\n\n");
+    printf("\n  Demo complete. All features + 3 evolution paths demonstrated.\n\n");
     return 0;
 }
 

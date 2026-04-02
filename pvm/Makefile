@@ -59,9 +59,12 @@ PVM_SRCS := \
     core/scheduler.c                    \
     core/pipeline.c                     \
     core/bytecode.c                     \
+    core/pvm_socket.c                   \
+    core/proto_dsl.c                    \
     net/packet.c                        \
     net/dispatcher.c                    \
     net/negotiation.c                   \
+    net/mesh.c                          \
     platform/module_loader.c            \
     platform/sim/platform_sim.c         \
     $(PLATFORM_SRC)
