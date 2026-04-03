@@ -1,0 +1,17 @@
+# PVM build artefacts
+pvm/pvm_demo
+pvm/modules/udp/udp.so
+pvm/modules/udp/udp.dylib
+pvm/modules/udp/udp.dll
+pvm/modules/vesper_lite/vesper_lite.so
+pvm/modules/vesper_lite/vesper_lite.dylib
+pvm/modules/vesper_lite/vesper_lite.dll
+
+# Editor / IDE
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
